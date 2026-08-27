@@ -79,17 +79,19 @@ jobs:
           dism /Unmount-Image /MountDir:$m /Commit
           Write-Host "committed"
 
-      - name: Build ISO (direct oscdimg)
+      - name: Build ISO (direct oscdimg, locate boot files dynamically)
         shell: pwsh
         run: |
           $oscd = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
           if (-not $oscd) { Write-Error "oscdimg not found"; exit 1 }
-          $etfs = "C:\winpe\media\boot\etfsboot.com"
-          $efi  = "C:\winpe\media\efi\microsoft\boot\efisys.bin"
-          if (-not (Test-Path $etfs)) { Write-Error "etfsboot.com missing"; exit 1 }
-          if (-not (Test-Path $efi))  { Write-Error "efisys.bin missing"; exit 1 }
-          $bd = ("2#p0,e,b" + $etfs + "#pEF,e,b" + $efi)
-          Write-Host ("oscdimg: " + $oscd)
+          $etfs = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter etfsboot.com -ErrorAction SilentlyContinue | Select-Object -First 1)
+          $efi  = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter efisys.bin  -ErrorAction SilentlyContinue | Select-Object -First 1)
+          $parts = @()
+          if ($etfs) { $parts += ("p0,e,b" + $etfs.FullName); Write-Host ("etfsboot: " + $etfs.FullName) }
+          if ($efi)  { $parts += ("pEF,e,b" + $efi.FullName); Write-Host ("efisys: " + $efi.FullName) }
+          if ($parts.Count -eq 0) { Write-Error "no boot files found"; exit 1 }
+          $bd = ($parts.Count.ToString() + "#" + ($parts -join "#"))
+          Write-Host ("bootdata: " + $bd)
           & $oscd -bootdata:$bd -u1 -udfver102 C:\winpe\media C:\winpe.iso
           Write-Host ("iso size: " + (Get-Item C:\winpe.iso).Length)
 
