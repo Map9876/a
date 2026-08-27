@@ -59,7 +59,6 @@ jobs:
           New-Item -ItemType Directory $m -Force | Out-Null
           dism /Mount-Image /ImageFile:C:\winpe\media\sources\boot.wim /Index:1 /MountDir:$m
           $oc = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs"
-          # proven hardcoded loop (safe $cab expansion)
           $comps = @("WinPE-WMI","WinPE-NetFX","WinPE-PowerShell","WinPE-Dot3Svc","WinPE-WLAN","WinPE-WLAN-WoW64","WinPE-RNDIS","WinPE-RNDIS-WoW64")
           foreach ($c in $comps) {
             $cab = "$oc\$c.cab"
@@ -69,7 +68,6 @@ jobs:
               if (Test-Path $loc) { dism /Image:$m /Add-Package /PackagePath:$loc }
             } else { Write-Host ("SKIP (no cab): $c") }
           }
-          # best-effort WLAN/RNDIS cabs via safe variable expansion
           Get-ChildItem "$oc" -Filter "WinPE-WLAN*.cab" -ErrorAction SilentlyContinue | ForEach-Object {
             $p = $_.FullName
             Write-Host ("adding extra: " + $_.Name)
@@ -81,11 +79,18 @@ jobs:
           dism /Unmount-Image /MountDir:$m /Commit
           Write-Host "committed"
 
-      - name: Build ISO
+      - name: Build ISO (direct oscdimg)
         shell: pwsh
         run: |
-          $pe = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
-          & "$pe\MakeWinPEMedia.cmd" /ISO C:\winpe C:\winpe.iso
+          $oscd = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $oscd) { Write-Error "oscdimg not found"; exit 1 }
+          $etfs = "C:\winpe\media\boot\etfsboot.com"
+          $efi  = "C:\winpe\media\efi\microsoft\boot\efisys.bin"
+          if (-not (Test-Path $etfs)) { Write-Error "etfsboot.com missing"; exit 1 }
+          if (-not (Test-Path $efi))  { Write-Error "efisys.bin missing"; exit 1 }
+          $bd = ("2#p0,e,b" + $etfs + "#pEF,e,b" + $efi)
+          Write-Host ("oscdimg: " + $oscd)
+          & $oscd -bootdata:$bd -u1 -udfver102 C:\winpe\media C:\winpe.iso
           Write-Host ("iso size: " + (Get-Item C:\winpe.iso).Length)
 
       - name: Upload ISO artifact
