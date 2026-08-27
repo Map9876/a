@@ -26,46 +26,22 @@ jobs:
           Write-Host "ADK core installed"
           Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2289981" -OutFile "$env:TEMP\adkwinpe.exe"
           Start-Process "$env:TEMP\adkwinpe.exe" -ArgumentList "/quiet" -Wait
-          Write-Host "WinPE addon install attempted"
+          Write-Host "WinPE addon installed"
 
-      - name: Create WinPE base (diagnostics + manual fallback bypassing copype)
+      - name: Stage WinPE working dir (manual copy, no copype)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
           $pe = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
-          Write-Host "=== amd64 tree (depth 2) ==="
-          Get-ChildItem "$pe\amd64" -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
-          Write-Host "=== winpe.wim locations ==="
-          Get-ChildItem "$pe\amd64" -Recurse -Filter winpe.wim -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
-          # Attempt copype first
-          & "$pe\copype.cmd" amd64 C:\winpe
-          if (-not (Test-Path C:\winpe\media\sources\boot.wim)) {
-            Write-Host "copype failed -> manual copy"
-            New-Item C:\winpe\mount -ItemType Directory -Force | Out-Null
-            if (Test-Path "$pe\amd64\media") { Copy-Item "$pe\amd64\media" C:\winpe\media -Recurse -Force }
-            $wim = Get-ChildItem "$pe\amd64" -Recurse -Filter winpe.wim -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($wim) {
-              New-Item C:\winpe\media\sources -ItemType Directory -Force | Out-Null
-              Copy-Item $wim.FullName C:\winpe\media\sources\boot.wim -Force
-              Write-Host ("copied wim: " + $wim.FullName)
-            }
-          }
+          $media = "$pe\amd64\Media"
+          $wim   = "$pe\amd64\en-us\winpe.wim"
+          if (-not (Test-Path $wim)) { Write-Error "winpe.wim missing"; exit 1 }
+          New-Item C:\winpe -ItemType Directory -Force | Out-Null
+          New-Item C:\winpe\mount -ItemType Directory -Force | Out-Null
+          Copy-Item $media C:\winpe\media -Recurse -Force
+          New-Item C:\winpe\media\sources -ItemType Directory -Force | Out-Null
+          Copy-Item $wim C:\winpe\media\sources\boot.wim -Force
           Write-Host ("boot.wim exists: " + (Test-Path C:\winpe\media\sources\boot.wim))
-
-      - name: Collect RNDIS driver (USB tethering, inbox driver)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory C:\rndis -Force | Out-Null
-          $folders = Get-ChildItem "C:\Windows\System32\DriverStore\FileRepository" -Directory -Filter "wceisvista.inf_*"
-          if ($folders.Count -eq 0) {
-            $folders = Get-ChildItem "C:\Windows\System32\DriverStore\FileRepository" -Directory |
-              Where-Object { Test-Path "$($_.FullName)\wceisvista.inf" }
-          }
-          foreach ($f in $folders) {
-            Copy-Item $f.FullName "C:\rndis\$($f.Name)" -Recurse -Force
-            Write-Host ("copied RNDIS folder: " + $f.Name)
-          }
-          if ($folders.Count -eq 0) { Write-Host "WARNING: RNDIS driver folder not found" }
 
       - name: Export third-party drivers (WiFi vendor drivers)
         shell: pwsh
@@ -74,24 +50,25 @@ jobs:
           dism /online /export-driver /destination:C:\drv
           Write-Host ("exported inf count: " + (Get-ChildItem C:\drv -Recurse -Filter *.inf).Count)
 
-      - name: Mount + add network/WiFi/PowerShell + inject RNDIS + drivers
+      - name: Mount + add network/WiFi/RNDIS/PowerShell + inject drivers
         shell: pwsh
         run: |
           $m = "C:\winpe\mount"
           New-Item -ItemType Directory $m -Force | Out-Null
           dism /Mount-Image /ImageFile:C:\winpe\media\sources\boot.wim /Index:1 /MountDir:$m
           $oc = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs"
-          $comps = @("WinPE-WMI","WinPE-NetFX","WinPE-PowerShell","WinPE-Dot3Svc","WinPE-WLAN","WinPE-WLAN-WoW64")
+          $comps = @("WinPE-WMI","WinPE-NetFX","WinPE-PowerShell","WinPE-Dot3Svc","WinPE-WLAN","WinPE-WLAN-WoW64","WinPE-RNDIS","WinPE-RNDIS-WoW64")
           foreach ($c in $comps) {
-            dism /Image:$m /Add-Package /PackagePath:"$oc\$c.cab"
-            $loc = "$oc\en-us\$c" + "_en-us.cab"
-            if (Test-Path $loc) { dism /Image:$m /Add-Package /PackagePath:$loc }
+            $cab = "$oc\$c.cab"
+            if (Test-Path $cab) {
+              dism /Image:$m /Add-Package /PackagePath:$cab
+              $loc = "$oc\en-us\$c" + "_en-us.cab"
+              if (Test-Path $loc) { dism /Image:$m /Add-Package /PackagePath:$loc }
+            } else {
+              Write-Host ("SKIP (no cab): $c")
+            }
           }
           Write-Host "components added"
-          if (Test-Path C:\rndis) {
-            dism /Image:$m /Add-Driver /Driver:C:\rndis /Recurse
-            Write-Host "RNDIS driver injected"
-          }
           dism /Image:$m /Add-Driver /Driver:C:\drv /Recurse
           Write-Host "third-party drivers injected"
           dism /Unmount-Image /MountDir:$m /Commit
