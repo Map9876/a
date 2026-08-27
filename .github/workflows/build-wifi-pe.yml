@@ -1,0 +1,69 @@
+name: Build Network WinPE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Windows ADK + WinPE addon
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2289980" -OutFile "$env:TEMP\adksetup.exe"
+          Start-Process "$env:TEMP\adksetup.exe" -ArgumentList "/quiet /features +" -Wait
+          Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2289981" -OutFile "$env:TEMP\adkwinpe.exe"
+          Start-Process "$env:TEMP\adkwinpe.exe" -ArgumentList "/quiet /features +" -Wait
+          Write-Host "ADK installed"
+
+      - name: Create WinPE base
+        shell: pwsh
+        run: |
+          $pe = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
+          & "$pe\copype.cmd" amd64 C:\winpe
+          Write-Host "WinPE base created"
+
+      - name: Export drivers from runner (includes RNDIS)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory C:\drv -Force | Out-Null
+          dism /online /export-driver /destination:C:\drv
+          Write-Host ("exported inf count: " + (Get-ChildItem C:\drv -Recurse -Filter *.inf).Count)
+
+      - name: Mount + add network/WiFi components + inject drivers
+        shell: pwsh
+        run: |
+          $m = "C:\winpe\mount"
+          New-Item -ItemType Directory $m -Force | Out-Null
+          dism /Mount-Image /ImageFile:C:\winpe\media\sources\boot.wim /Index:1 /MountDir:$m
+          $oc = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs"
+          $comps = @("WinPE-WMI","WinPE-NetFX","WinPE-PowerShell","WinPE-Dot3Svc","WinPE-WLAN","WinPE-WLAN-WoW64")
+          foreach ($c in $comps) {
+            dism /Image:$m /Add-Package /PackagePath:"$oc\$c.cab"
+            $loc = "$oc\en-us\$c" + "_en-us.cab"
+            if (Test-Path $loc) { dism /Image:$m /Add-Package /PackagePath:$loc }
+          }
+          Write-Host "components added"
+          dism /Image:$m /Add-Driver /Driver:C:\drv /Recurse
+          Write-Host "drivers injected"
+          dism /Unmount-Image /MountDir:$m /Commit
+          Write-Host "committed"
+
+      - name: Build ISO
+        shell: pwsh
+        run: |
+          $pe = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
+          & "$pe\MakeWinPEMedia.cmd" /ISO C:\winpe C:\winpe.iso
+          Write-Host ("iso size: " + (Get-Item C:\winpe.iso).Length)
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winpe-iso
+          path: C:\winpe.iso
+          if-no-files-found: error
