@@ -85,4 +85,4 @@ jobs:
         with:
           name: winpe-iso
           path: C:\winpe.iso
-          if-no-files-ffound: error
+          if-no-files-found: error
