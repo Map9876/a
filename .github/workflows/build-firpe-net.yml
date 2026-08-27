@@ -34,12 +34,13 @@ jobs:
           $oscd = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           Write-Host ("oscdimg found: " + ($null -ne $oscd))
 
-      - name: Clone cnb repo (anon) + pull only FirPE image
+      - name: Clone cnb repo (token Basic auth) + pull only FirPE image
         shell: pwsh
         run: |
-          # 匿名克隆即可（cnb 仓库公开读；之前 Bearer 头导致 403）
-          # --no-checkout 避免检出无关的大 LFS 文件触发 smudge 失败
-          git clone --depth 1 --filter=blob:none --no-checkout https://cnb.cool/kfc50/vllm6.git frepo
+          # GitHub runner 在公网，cnb 的 LFS 对象必须带令牌；用 Basic 鉴权嵌 URL
+          # --no-checkout 避免检出无关大 LFS 文件(如 llm.mnn.weight)触发 smudge 失败
+          $tok="${{ secrets.CNB_TOKEN }}"
+          git clone --depth 1 --filter=blob:none --no-checkout "https://kfc50:$tok@cnb.cool/kfc50/vllm6.git" frepo
           cd frepo
           git lfs install
           git lfs fetch --include='downloads/winpe/FirPE-V2.1.1.img'
