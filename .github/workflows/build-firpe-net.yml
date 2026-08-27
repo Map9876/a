@@ -34,17 +34,17 @@ jobs:
           $oscd = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           Write-Host ("oscdimg found: " + ($null -ne $oscd))
 
-      - name: Clone cnb repo (with token) + pull FirPE LFS
+      - name: Clone cnb repo (anon) + pull only FirPE image
         shell: pwsh
         run: |
-          $tok="${{ secrets.CNB_TOKEN }}"
-          git config --global http.extraHeader "Authorization: Bearer $tok"
-          git config --global credential.helper ""
-          git clone --depth 1 --filter=blob:none https://cnb.cool/kfc50/vllm6.git frepo
+          # 匿名克隆即可（cnb 仓库公开读；之前 Bearer 头导致 403）
+          # --no-checkout 避免检出无关的大 LFS 文件触发 smudge 失败
+          git clone --depth 1 --filter=blob:none --no-checkout https://cnb.cool/kfc50/vllm6.git frepo
           cd frepo
           git lfs install
-          git lfs pull --include='downloads/winpe/FirPE-V2.1.1.img'
-          $f = "frepo/downloads/winpe/FirPE-V2.1.1.img"
+          git lfs fetch --include='downloads/winpe/FirPE-V2.1.1.img'
+          git checkout HEAD -- downloads/winpe/FirPE-V2.1.1.img
+          $f = "downloads/winpe/FirPE-V2.1.1.img"
           Write-Host ("FirPE size: " + (Get-Item $f).Length)
 
       - name: Extract 11PEX64.WIM from FirPE image (7-Zip)
