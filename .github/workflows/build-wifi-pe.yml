@@ -6,8 +6,8 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
-  actions: read
+  contents: write
+  actions: write
   id-token: write
 
 jobs:
@@ -27,9 +27,8 @@ jobs:
           Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2289981" -OutFile "$env:TEMP\adkwinpe.exe"
           Start-Process "$env:TEMP\adkwinpe.exe" -ArgumentList "/quiet" -Wait
           Write-Host "WinPE addon installed"
-          # sanity: oscdimg must exist
           $oscd = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10" -Recurse -Filter oscdimg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          Write-Host ("oscdimg found: " + ($null -ne $oscd) + " @ " + $oscd.FullName)
+          Write-Host ("oscdimg found: " + ($null -ne $oscd))
 
       - name: Stage WinPE working dir (manual copy, no copype)
         shell: pwsh
@@ -60,12 +59,21 @@ jobs:
           New-Item -ItemType Directory $m -Force | Out-Null
           dism /Mount-Image /ImageFile:C:\winpe\media\sources\boot.wim /Index:1 /MountDir:$m
           $oc = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs"
-          $pkgs = @("WinPE-WMI","WinPE-NetFX","WinPE-PowerShell","WinPE-Dot3Svc","WinPE-WLAN","WinPE-RNDIS")
-          foreach ($p in $pkgs) {
-            Get-ChildItem "$oc" -Filter "$p*.cab" -ErrorAction SilentlyContinue | ForEach-Object {
-              Write-Host ("adding: " + $_.Name)
-              dism /Image:$m /Add-Package /PackagePath:$_.FullName
-            }
+          # proven hardcoded loop (safe $cab expansion)
+          $comps = @("WinPE-WMI","WinPE-NetFX","WinPE-PowerShell","WinPE-Dot3Svc","WinPE-WLAN","WinPE-WLAN-WoW64","WinPE-RNDIS","WinPE-RNDIS-WoW64")
+          foreach ($c in $comps) {
+            $cab = "$oc\$c.cab"
+            if (Test-Path $cab) {
+              dism /Image:$m /Add-Package /PackagePath:$cab
+              $loc = "$oc\en-us\$c" + "_en-us.cab"
+              if (Test-Path $loc) { dism /Image:$m /Add-Package /PackagePath:$loc }
+            } else { Write-Host ("SKIP (no cab): $c") }
+          }
+          # best-effort WLAN/RNDIS cabs via safe variable expansion
+          Get-ChildItem "$oc" -Filter "WinPE-WLAN*.cab" -ErrorAction SilentlyContinue | ForEach-Object {
+            $p = $_.FullName
+            Write-Host ("adding extra: " + $_.Name)
+            dism /Image:$m /Add-Package /PackagePath:"$p"
           }
           Write-Host "components added"
           dism /Image:$m /Add-Driver /Driver:C:\drv /Recurse
