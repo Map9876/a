@@ -21,34 +21,36 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          # Main ADK (Deployment Tools) - provides DISM/MakeWinPEMedia host tooling
           Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2289980" -OutFile "$env:TEMP\adksetup.exe"
           Start-Process "$env:TEMP\adksetup.exe" -ArgumentList "/quiet /features OptionId.DeploymentTools" -Wait
           Write-Host "ADK core installed"
-          # WinPE addon - provides copype + amd64 PE source + WinPE_OCs (do NOT pass /features)
           Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2289981" -OutFile "$env:TEMP\adkwinpe.exe"
           Start-Process "$env:TEMP\adkwinpe.exe" -ArgumentList "/quiet" -Wait
           Write-Host "WinPE addon install attempted"
 
-      - name: Diagnose WinPE install
+      - name: Create WinPE base (diagnostics + manual fallback bypassing copype)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           $pe = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
-          Write-Host ("PE root exists: " + (Test-Path $pe))
-          if (Test-Path $pe) { Get-ChildItem $pe | ForEach-Object { Write-Host ("  entry: " + $_.Name) } }
-          Write-Host ("amd64 exists: " + (Test-Path "$pe\amd64"))
-          Write-Host ("copype.cmd exists: " + (Test-Path "$pe\copype.cmd"))
-          if (-not (Test-Path "$pe\amd64")) {
-            Write-Error "WinPE amd64 source missing - addon did not install"
-            exit 1
-          }
-
-      - name: Create WinPE base
-        shell: pwsh
-        run: |
-          $pe = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment"
+          Write-Host "=== amd64 tree (depth 2) ==="
+          Get-ChildItem "$pe\amd64" -Recurse -Depth 2 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+          Write-Host "=== winpe.wim locations ==="
+          Get-ChildItem "$pe\amd64" -Recurse -Filter winpe.wim -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+          # Attempt copype first
           & "$pe\copype.cmd" amd64 C:\winpe
-          Write-Host "WinPE base created"
+          if (-not (Test-Path C:\winpe\media\sources\boot.wim)) {
+            Write-Host "copype failed -> manual copy"
+            New-Item C:\winpe\mount -ItemType Directory -Force | Out-Null
+            if (Test-Path "$pe\amd64\media") { Copy-Item "$pe\amd64\media" C:\winpe\media -Recurse -Force }
+            $wim = Get-ChildItem "$pe\amd64" -Recurse -Filter winpe.wim -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($wim) {
+              New-Item C:\winpe\media\sources -ItemType Directory -Force | Out-Null
+              Copy-Item $wim.FullName C:\winpe\media\sources\boot.wim -Force
+              Write-Host ("copied wim: " + $wim.FullName)
+            }
+          }
+          Write-Host ("boot.wim exists: " + (Test-Path C:\winpe\media\sources\boot.wim))
 
       - name: Collect RNDIS driver (USB tethering, inbox driver)
         shell: pwsh
