@@ -28,14 +28,31 @@ jobs:
           & "$pe\copype.cmd" amd64 C:\winpe
           Write-Host "WinPE base created"
 
-      - name: Export drivers from runner (includes RNDIS)
+      - name: Collect RNDIS driver (USB tethering, inbox driver)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory C:\rndis -Force | Out-Null
+          # RNDIS is an inbox driver; copy its FileRepository folder explicitly
+          $folders = Get-ChildItem "C:\Windows\System32\DriverStore\FileRepository" -Directory -Filter "wceisvista.inf_*"
+          if ($folders.Count -eq 0) {
+            # fallback: search by inf name
+            $folders = Get-ChildItem "C:\Windows\System32\DriverStore\FileRepository" -Directory |
+              Where-Object { Test-Path "$($_.FullName)\wceisvista.inf" }
+          }
+          foreach ($f in $folders) {
+            Copy-Item $f.FullName "C:\rndis\$($f.Name)" -Recurse -Force
+            Write-Host ("copied RNDIS folder: " + $f.Name)
+          }
+          if ($folders.Count -eq 0) { Write-Host "WARNING: RNDIS driver folder not found" }
+
+      - name: Export third-party drivers (WiFi vendor drivers)
         shell: pwsh
         run: |
           New-Item -ItemType Directory C:\drv -Force | Out-Null
           dism /online /export-driver /destination:C:\drv
           Write-Host ("exported inf count: " + (Get-ChildItem C:\drv -Recurse -Filter *.inf).Count)
 
-      - name: Mount + add network/WiFi components + inject drivers
+      - name: Mount + add network/WiFi/PowerShell + inject RNDIS + drivers
         shell: pwsh
         run: |
           $m = "C:\winpe\mount"
@@ -49,8 +66,12 @@ jobs:
             if (Test-Path $loc) { dism /Image:$m /Add-Package /PackagePath:$loc }
           }
           Write-Host "components added"
+          if (Test-Path C:\rndis) {
+            dism /Image:$m /Add-Driver /Driver:C:\rndis /Recurse
+            Write-Host "RNDIS driver injected"
+          }
           dism /Image:$m /Add-Driver /Driver:C:\drv /Recurse
-          Write-Host "drivers injected"
+          Write-Host "third-party drivers injected"
           dism /Unmount-Image /MountDir:$m /Commit
           Write-Host "committed"
 
